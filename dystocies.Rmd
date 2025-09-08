@@ -1,0 +1,1605 @@
+---
+title: "dystocies"
+author: "Kanne Tamibe Kochiake"
+date: "2025-09-07"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# FACTEURS FAVORISANT LA SURVENUE DES DYSTOCIES CHEZ LES ACCOUCHÉES
+
+## Necessary libraries
+```{r}
+library("readxl")
+library("dplyr")
+library("ggplot2")
+library("summarytools")
+library(forcats)
+```
+
+
+## Chargement du jeu de donnees et pretraitement
+
+```{r}
+# Lire le fichier Excel
+donnees <- read_excel("nouvelle collecte de donnees.xlsx", sheet = "Sheet1")
+
+# Aperçu des données
+head(donnees, n=5)
+```
+
+
+
+Ce jeu de données comprend 85 patientes et décrit 25 caractéristiques couvrant les dimensions socio-démographiques (âge, parité, profession, niveau d'instruction, statut matrimonial, religion), les antécédents obstétricaux et médicaux, les paramètres fœtaux (présentation, macrosomie, anomalies), le déroulement du travail (durée, type de dystocie) et la prise en charge médicale (nombre de CPN, suivi professionnel, interventions, complications, utilisation d'ocytociques). Il permet une analyse exhaustive des facteurs intrinsèques et extrinsèques favorisant la survenue des dystocies.
+
+
+```{r}
+df = donnees
+glimpse(donnees)
+```
+Certaines caracteristiques presentent necessitent un pretraitement avant l'analyse, c'est pourquoi dans les lignes qui suivenet nous allons commencer par le pretraitement avant d'attaquer l'analyse en elle meme.
+
+
+
+```{r}
+# 1. SUPPRIMER LES LIGNES VIDES (où il n'y a pas d'ID)
+df = df[!is.na(df$ID), ]
+```
+
+
+```{r}
+# 2. NETTOYAGE DE LA COLONNE 'Age'
+# Extraire les nombres et convertir en numérique. Gère les cas comme "29 ans".
+df$Age <- as.numeric(gsub("[^0-9]", "", df$Age))
+table(df$Age)
+#str(df$Age)
+```
+
+La distribution d'âge des 85 patientes montre une population majoritairement jeune et en âge de procréer actif, avec une concentration entre 26 et 39 ans. L'âge moyen se situe autour de 30-35 ans, comme en témoigne le pic à 35 ans (9 patientes). On observe une représentation significative de grossesses après 35 ans (16 patientes âgées de 35 à 43 ans), ce qui correspond à la définition de "grossesse à risque" en raison de l'âge maternel avancé. La plus jeune patiente a 18 ans et la plus âgée 43 ans, indiquant une diversité d'âges couvrant l'ensemble de la période de fertilité. Cette distribution est cohérente avec une population obstétricale standard, tout en alertant sur la nécessité d'une surveillance particulière pour les patientes de plus de 35 ans, plus susceptibles de présenter des complications.
+
+
+
+```{r}
+# 3. NETTOYAGE DE LA COLONNE 'poids': Supprimer "kg" et tout espace, puis convertir en numérique
+df$poids <- as.numeric(gsub("kg|[[:space:]]", "", df$poids))
+
+
+# 4. Corriger les valeurs numériques (parité, poids) si nécessaire: La colonne 'poids' est parfois numérique, parfois caractère. Convertissons-la.
+df$poids <- as.numeric(df$poids)
+```
+
+
+```{r}
+# Corriger les noms de colonnes avec des typos
+names(df) <- gsub("presntation", "presentation", names(df))
+names(df) <- gsub("lique", "liquide", names(df))
+
+# Liste des variables à transformer en facteurs
+variables_a_factor <- c(
+  "religion",
+  "statut matrimonial", 
+  "profession",
+  "niveau d'instruction",
+  "antecedents de cesarienne",
+  "antecedents obstetricaux",
+  "antecedents medicaux",
+  "presentation du fœtus durant le travail",
+  "presence de macrosomie fœtale", 
+  "presence d'anomalie du liquide amniotique",
+  "presence d'anomalies fœtales",
+  "anomalie du liquide amniotique",
+  "Suivi par un professionnel de sante",
+  "type de dystocie",
+  "interventions medicales faite", 
+  "complications pendant la grossesse",
+  "prise d'un ocytocique traditionnelle"
+)
+
+# Transformer toutes ces variables en facteurs
+df <- df %>%
+  mutate(across(all_of(variables_a_factor), as.factor))
+
+# corriger les formats de duree travail
+df$duree_travail_heures <- as.numeric(gsub("[^0-9.]", "", df$`duree du travail`))
+df$duree_travail_heures <- ifelse(grepl("30", df$`duree du travail`), 
+                                 df$duree_travail_heures + 0.5, 
+                                 df$duree_travail_heures)
+
+
+# Gérer spécifiquement le cas "1 heure 30"
+df$duree_travail_heures <- ifelse(
+  grepl("30", df$`duree du travail`), 1.5,
+  as.numeric(gsub("[^0-9]", "", df$`duree du travail`))
+)
+
+# Vérification finale
+table(df$duree_travail_heures)
+
+# Vérification
+table(df$duree_travail_heures)
+
+
+# transformer les valeurs "OUI" en "oui" pour la variable prise d'un ocytocique traditionnelle
+df <- df %>%
+  mutate(`prise d'un ocytocique traditionnelle` = 
+           tolower(`prise d'un ocytocique traditionnelle`))
+
+# Afficher les niveaux de chaque facteur pour vérification
+for(var in variables_a_factor) {
+  cat("\n", var, ":\n")
+  print(levels(df[[var]]))
+}
+
+# Vérifier la structure des données
+glimpse(df)
+```
+
+
+
+## I. CARACTÉRISATION DE LA POPULATION ÉTUDIÉE
+## 1. Quelle est la taille de l'échantillon et sa répartition par type de dystocie (mécanique vs dynamique) ?
+```{r}
+## I. CARACTÉRISATION DE LA POPULATION ÉTUDIÉE
+## 1. Quelle est la taille de l'échantillon et sa répartition par type de dystocie (mécanique vs dynamique) ?
+
+# Taille de l'échantillon
+n_total <- nrow(df)
+cat("Taille totale de l'échantillon :", n_total, "patientes\n\n")
+
+# Répartition par type de dystocie
+repartition_dystocie <- table(df$`type de dystocie`)
+pourcentage_dystocie <- prop.table(repartition_dystocie) * 100
+
+cat("RÉPARTITION PAR TYPE DE DYSTOCIE :\n")
+print(repartition_dystocie)
+cat("\nRÉPARTITION POURCENTAGE :\n")
+print(round(pourcentage_dystocie, 1))
+
+#le test approprié
+repartition_obs <- c(26, 37)  # observé: dynamique, mécanique
+repartition_att <- c(31.5, 31.5)  # attendu: équilibre 50/50
+
+# Test du Chi² d'adéquation
+test_chi2 <- chisq.test(repartition_obs, p = rep(0.5, 2))
+
+cat("RÉPARTITION OBSERVÉE :\n")
+cat("Dystocie dynamique :", repartition_obs[1], "cas (41,3%)\n")
+cat("Dystocie mécanique :", repartition_obs[2], "cas (58,7%)\n\n")
+
+cat("TEST DU CHI² D'ADÉQUATION (vs répartition 50/50) :\n")
+cat("Chi² =", round(test_chi2$statistic, 3), "\n")
+cat("ddl =", test_chi2$parameter, "\n")
+cat("p-value =", round(test_chi2$p.value, 4), "\n")
+
+# Interprétation clinique
+if(test_chi2$p.value < 0.05) {
+  cat("\nINTERPRÉTATION : La différence de répartition est statistiquement significative.\n")
+} else {
+  cat("\nINTERPRÉTATION : Aucune différence significative dans la répartition des types de dystocie.\n")
+}
+
+
+# Visualisation
+library(ggplot2)
+ggplot(df, aes(x = `type de dystocie`, fill = `type de dystocie`)) +
+  geom_bar(alpha = 0.8) +
+  geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -0.5) +
+  labs(title = "Répartition des patientes par type de dystocie",
+       subtitle = paste("Total :", n_total, "patientes"),
+       x = "Type de dystocie", 
+       y = "Nombre de patientes") +
+  scale_fill_manual(values = c("mecanique" = "#e74c3c", "dynamique" = "#3498db")) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+Sur les 85 patientes initiales, seules 63 ont un diagnostic de dystocie renseigné, révélant une répartition de 58,7 % de dystocies mécaniques (37 cas) contre 41,3 % de dystocies dynamiques (26 cas). Bien que numériquement plus fréquentes, les dystocies mécaniques ne présentent pas une prédominance statistiquement significative (p = 0,166) par rapport aux dystocies dynamiques. Cette absence de différence significative indique que les deux formes sont cliniquement pertinentes dans cette population, justifiant une investigation approfondie des facteurs de risque spécifiques à chaque type. Les 22 diagnostics manquants (25,9 % des données) limitent cependant la portée des conclusions.
+
+
+
+## 2. Quel est le profil socio-démographique des patientes (âge moyen, parité, statut matrimonial, profession, niveau d'instruction) ?
+
+```{r}
+## 2. Quel est le profil socio-démographique des patientes (âge moyen, parité, statut matrimonial, profession, niveau d'instruction) ?
+
+# Calcul des statistiques descriptives
+profil_socio <- df %>%
+  summarise(
+    Age_moyen = mean(Age, na.rm = TRUE),
+    Age_sd = sd(Age, na.rm = TRUE),
+    Parite_moyenne = mean(parite, na.rm = TRUE),
+    Parite_sd = sd(parite, na.rm = TRUE),
+    Effectif_total = n()
+  )
+
+# Répartition des variables catégorielles avec pourcentages
+statut_matrimonial <- df %>%
+  count(`statut matrimonial`) %>%
+  mutate(pourcentage = n/sum(n)*100,
+         label = paste0(n, " (", round(pourcentage, 1), "%)"))
+
+niveau_instruction <- df %>%
+  count(`niveau d'instruction`) %>%
+  mutate(pourcentage = n/sum(n)*100,
+         label = paste0(n, " (", round(pourcentage, 1), "%)"))
+
+religion_df <- df %>%
+  count(religion) %>%
+  mutate(pourcentage = n/sum(n)*100,
+         label = paste0(n, " (", round(pourcentage, 1), "%)"))
+
+# Analyse des professions
+profession_summary <- df %>%
+  count(profession) %>%
+  arrange(desc(n)) %>%
+  mutate(pourcentage = round(n/nrow(df) * 100, 1),
+         label = paste0(n, " (", pourcentage, "%)"))
+
+# Affichage des résultats
+cat("PROFIL SOCIO-DÉMOGRAPHIQUE DES PATIENTES (n =", nrow(df), ")\n\n")
+
+cat("ÂGE MOYEN :", round(profil_socio$Age_moyen, 1), "ans (SD =", round(profil_socio$Age_sd, 1), ")\n")
+cat("PARITÉ MOYENNE :", round(profil_socio$Parite_moyenne, 1), "(SD =", round(profil_socio$Parite_sd, 1), ")\n\n")
+
+cat("RÉPARTITION PAR STATUT MATRIMONIAL :\n")
+print(statut_matrimonial[, c("statut matrimonial", "n", "pourcentage")])
+cat("\n")
+
+cat("RÉPARTITION PAR NIVEAU D'INSTRUCTION :\n")
+print(niveau_instruction[, c("niveau d'instruction", "n", "pourcentage")])
+cat("\n")
+
+cat("RÉPARTITION PAR RELIGION :\n")
+print(religion_df[, c("religion", "n", "pourcentage")])
+cat("\n")
+
+cat("TOP 5 DES PROFESSIONS :\n")
+print(head(profession_summary, 5))
+cat("\n")
+
+# Visualisation du profil avec pourcentages
+library(ggplot2)
+library(patchwork)
+library(scales)
+
+# Graphique âge avec densité
+p1 <- ggplot(df, aes(x = Age)) +
+  geom_histogram(aes(y = after_stat(density)), fill = "#3498db", 
+                 binwidth = 5, alpha = 0.8, color = "white") +
+  geom_density(alpha = 0.3, fill = "#2c3e50", color = "#2c3e50") +
+  labs(title = "DISTRIBUTION DE L'ÂGE DES PATIENTES",
+       subtitle = paste("Moyenne =", round(profil_socio$Age_moyen, 1), "ans"),
+       x = "Âge (années)", y = "Densité") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+
+# Graphique parité avec pourcentages
+p2 <- ggplot(df, aes(x = factor(parite))) +
+  geom_bar(aes(y = after_stat(count/sum(count))), fill = "#e74c3c", alpha = 0.8) +
+  geom_text(aes(label = paste0(round(after_stat(count/sum(count))*100, 1), "%"),
+            y = after_stat(count/sum(count))), 
+            stat = "count", vjust = -0.5, size = 3.5) +
+  labs(title = "DISTRIBUTION DE LA PARITÉ",
+       subtitle = paste("Moyenne =", round(profil_socio$Parite_moyenne, 1)),
+       x = "Nombre d'accouchements", y = "Pourcentage") +
+  scale_y_continuous(labels = percent_format()) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+
+# Graphique statut matrimonial avec pourcentages
+p3 <- ggplot(statut_matrimonial, aes(x = `statut matrimonial`, y = n, fill = `statut matrimonial`)) +
+  geom_col(alpha = 0.8) +
+  geom_text(aes(label = label), vjust = -0.5, size = 4, fontface = "bold") +
+  labs(title = "RÉPARTITION PAR STATUT MATRIMONIAL",
+       x = "", y = "Nombre de patientes") +
+  scale_fill_manual(values = c("#2ecc71", "#f39c12")) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        axis.text.x = element_text(angle = 0, hjust = 0.5))
+
+# Graphique niveau d'instruction avec pourcentages
+p4 <- ggplot(niveau_instruction, aes(x = `niveau d'instruction`, y = n, 
+                                    fill = `niveau d'instruction`)) +
+  geom_col(alpha = 0.8) +
+  geom_text(aes(label = label), vjust = -0.5, size = 4, fontface = "bold") +
+  labs(title = "RÉPARTITION PAR NIVEAU D'INSTRUCTION",
+       x = "", y = "Nombre de patientes") +
+  scale_fill_manual(values = c("#9b59b6", "#e67e22", "#1abc9c")) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        axis.text.x = element_text(angle = 0, hjust = 0.5))
+
+# Assemblage des graphiques
+p1
+p2
+p3
+p4
+```
+
+
+```{r}
+## REPRÉSENTATION GRAPHIQUE DES PROFESSIONS ET RELIGIONS
+
+# Préparation des données pour les professions
+profession_df <- df %>%
+  count(profession) %>%
+  mutate(
+    pourcentage = n / sum(n) * 100,
+    label = paste0(n, " (", round(pourcentage, 1), "%)"),
+    profession = factor(profession),
+    profession = fct_reorder(profession, n)
+  )
+
+# Préparation des données pour la religion
+religion_df <- df %>%
+  count(religion) %>%
+  mutate(
+    pourcentage = n / sum(n) * 100,
+    label = paste0(n, " (", round(pourcentage, 1), "%)"),
+    religion = factor(religion, 
+                     levels = c("catholique", "musulmane", "prostestante"),
+                     labels = c("Catholique", "Musulmane", "Protestante"))
+  )
+
+# Graphique des professions (barres horizontales)
+p_profession <- ggplot(profession_df, aes(x = n, y = profession, fill = profession)) +
+  geom_col(alpha = 0.8, width = 0.7) +
+  geom_text(aes(label = label), hjust = -0.1, size = 3.5, fontface = "bold") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(title = "RÉPARTITION DES PROFESSIONS",
+       subtitle = "85 patientes",
+       x = "Nombre de patientes",
+       y = "") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        axis.text.y = element_text(face = "bold"),
+        panel.grid.major.y = element_blank())
+
+# Graphique de la religion (barres verticales avec pourcentages)
+p_religion <- ggplot(religion_df, aes(x = religion, y = n, fill = religion)) +
+  geom_col(alpha = 0.8, width = 0.6) +
+  geom_text(aes(label = label), vjust = -0.5, size = 4.5, fontface = "bold") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(title = "RÉPARTITION PAR RELIGION",
+       subtitle = "85 patientes",
+       x = "",
+       y = "Nombre de patientes") +
+  scale_fill_manual(values = c("#3498db", "#e74c3c", "#2ecc71")) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        axis.text.x = element_text(face = "bold", size = 11))
+
+p_religion
+p_profession
+
+# Affichage des tableaux détaillés
+#cat("DISTRIBUTION DÉTAILLÉE DES PROFESSIONS :\n")
+#print(profession_df[order(-profession_df$n), c("profession", "n", "pourcentage")])
+#cat("\n")
+
+#cat("DISTRIBUTION DÉTAILLÉE DES RELIGIONS :\n")
+#print(religion_df[order(-religion_df$n), c("religion", "n", "pourcentage")])
+```
+
+ RÉPARTITION PAR RELIGION :
+La population est majoritairement de confession catholique (47,1%), suivie des protestants (14,1%) et des musulmans (12,9%). Cependant, 25,9% des données sont manquantes (NA. 
+
+RÉPARTITION DES PROFESSIONS :
+Les étudiantes représentent le groupe professionnel le plus important (11,8%), suivies des ménagères (9,4%), des couturières et commerçantes (8,2% chacune). On observe une grande diversité professionnelle avec 19 métiers représentés (etudiante, menagere, couturiere, commercante, secretaire, caissiere, enseignante, eleve, institutrice, infirmiere, estheticienne, comptable, coiffeuse, technicienne biomedicale, hotesse, forestiere, decoratrice et commerciale) dont sans emploi inclu, mais 25,9% de données manquantes affectent la complétude de l'analyse.
+
+DISTRIBUTION DE L'ÂGE :
+La distribution d'âge des 85 patientes montre une population majoritairement jeune et en âge de procréer actif, avec une concentration entre 26 et 39 ans. L'âge moyen se situe autour de 30-35 ans, comme en témoigne le pic à 35 ans (9 patientes). On observe une représentation significative de grossesses après 35 ans (16 patientes âgées de 35 à 43 ans), ce qui correspond à la définition de "grossesse à risque" en raison de l'âge maternel avancé. La plus jeune patiente a 18 ans et la plus âgée 43 ans, indiquant une diversité d'âges couvrant l'ensemble de la période de fertilité. Cette distribution est cohérente avec une population obstétricale standard, tout en alertant sur la nécessité d'une surveillance particulière pour les patientes de plus de 35 ans, plus susceptibles de présenter des complications.
+
+
+DISTRIBUTION DE LA PARITÉ :
+Cette analyse révèle que les femmes de l'étude ont en moyenne déjà eu 3,1 enfants, ce qui les caractérise comme une population multipare ayant une expérience obstétricale significative. La distribution montre que les parités 2 et 3 sont les plus fréquentes parmi les données disponibles, indiquant que la majorité des patientes ont déjà accouché deux ou trois fois auparavant. Cependant, la fiabilité de ces résultats est limitée par un taux important de données manquantes (25,9%), qui affecte la précision des estimations et suggère que le véritable profil de parité pourrait différer si l'ensemble des données était disponible. Cette multiparité est un facteur important à considérer dans l'analyse des dystocies, car les antécédents obstétricaux influencent significativement le déroulement des accouchements ultérieurs.
+
+
+STATUT MATRIMONIAL :
+Cette distribution du statut matrimonial révèle une prédominance significative de patientes célibataires (44,7%) par rapport aux femmes mariées (29,4%), ce qui représente un profil sociodémographique notable dans un contexte de santé maternelle. Cette proportion élevée de célibataires pourrait influencer les parcours de soins prénatals, l'accès aux services de santé, et potentiellement les comportements de recours aux soins obstétricaux.
+
+
+NIVEAU D'INSTRUCTION :
+La population étudiée présente un niveau d'éducation globalement élevé, avec une nette majorité de patientes ayant atteint un niveau secondaire (32,9%) ou supérieur (37,6%), tandis que seulement une faible proportion (3,5%) possède un niveau primaire. Ce profil suggère une population relativement instruite, ce qui pourrait influencer positivement l'accès à l'information santé, l'observance des suivis prénatals et la capacité à naviguer dans le système de soins. Cependant, la présence de 25,9% de données manquantes impose une prudence dans l'interprétation définitive, car l'absence de ces informations pourrait modifier substantiellement la compréhension du profil éducatif réel de la cohorte.
+
+
+Toutes ces caracteristiques  montrent un taux constant de 25,9% de données manquantes (22 patientes sur 85), indiquant un problème systématique de complétude du recueil qui affecte la validité des analyses et nécessite une investigation des causes de ces manquants.
+
+
+
+## 3. Existe-t-il des caractéristiques socio-démographiques prédominantes dans chaque groupe de dystocie ? Le statut matrimonial ou le niveau d'instruction influence-t-il le type de dystocie ? Certaines professions sont-elles surreprésentées dans un groupe ?
+
+
+
+```{r}
+## REPRÉSENTATIONS GRAPHIQUES PAR TYPE DE DYSTOCIE
+
+# Créer un thème commun pour tous les graphiques
+mon_theme <- theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 1. ÂGE PAR TYPE DE DYSTOCIE (Boxplot + Violon)
+p_age <- ggplot(df_dystocie, aes(x = `type de dystocie`, y = Age, fill = `type de dystocie`)) +
+  geom_violin(alpha = 0.6, width = 0.8) +
+  geom_boxplot(width = 0.2, alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.1, alpha = 0.5, size = 1.5) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4, color = "red") +
+  labs(title = "DISTRIBUTION DE L'ÂGE PAR TYPE DE DYSTOCIE",
+       subtitle = "Point rouge = moyenne, Boîte = médiane ± IQR",
+       x = "Type de dystocie", y = "Âge (années)") +
+  scale_fill_manual(values = c("dynamique" = "#3498db", "mecanique" = "#e74c3c")) +
+  mon_theme +
+  theme(legend.position = "none")
+
+# 2. PARITÉ PAR TYPE DE DYSTOCIE (Barres avec pourcentages)
+parite_summary <- df_dystocie %>%
+  group_by(`type de dystocie`, parite) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(`type de dystocie`) %>%
+  mutate(pourcentage = n/sum(n)*100,
+         label = paste0(n, " (", round(pourcentage, 1), "%)"))
+
+p_parite <- ggplot(parite_summary, aes(x = factor(parite), y = n, fill = `type de dystocie`)) +
+  geom_col(position = "dodge", alpha = 0.8) +
+  geom_text(aes(label = label), position = position_dodge(width = 0.9), 
+            vjust = -0.5, size = 3) +
+  labs(title = "RÉPARTITION DE LA PARITÉ PAR TYPE DE DYSTOCIE",
+       x = "Nombre d'accouchements (parité)", y = "Nombre de patientes",
+       fill = "Type de dystocie") +
+  scale_fill_manual(values = c("dynamique" = "#3498db", "mecanique" = "#e74c3c")) +
+  mon_theme
+
+# 3. STATUT MATRIMONIAL PAR TYPE DE DYSTOCIE (Barres empilées)
+statut_summary <- df_dystocie %>%
+  count(`type de dystocie`, `statut matrimonial`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(pourcentage = n/sum(n)*100,
+         label = paste0(n, " (", round(pourcentage, 1), "%)"))
+
+p_statut <- ggplot(statut_summary, aes(x = `type de dystocie`, y = n, fill = `statut matrimonial`)) +
+  geom_col(position = "stack", alpha = 0.8) +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5), 
+            size = 3.5, color = "white", fontface = "bold") +
+  labs(title = "STATUT MATRIMONIAL PAR TYPE DE DYSTOCIE",
+       x = "Type de dystocie", y = "Nombre de patientes",
+       fill = "Statut matrimonial") +
+  scale_fill_manual(values = c("celibataire" = "#2ecc71", "mariee" = "#f39c12")) +
+  mon_theme
+
+# 4. NIVEAU D'INSTRUCTION PAR TYPE DE DYSTOCIE (Barres groupées)
+instruction_summary <- df_dystocie %>%
+  count(`type de dystocie`, `niveau d'instruction`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(pourcentage = n/sum(n)*100,
+         label = paste0(n, " (", round(pourcentage, 1), "%)"))
+
+p_instruction <- ggplot(instruction_summary, 
+                       aes(x = `niveau d'instruction`, y = n, fill = `type de dystocie`)) +
+  geom_col(position = "dodge", alpha = 0.8) +
+  geom_text(aes(label = label), position = position_dodge(width = 0.9), 
+            vjust = -0.5, size = 3) +
+  labs(title = "NIVEAU D'INSTRUCTION PAR TYPE DE DYSTOCIE",
+       x = "Niveau d'instruction", y = "Nombre de patientes",
+       fill = "Type de dystocie") +
+  scale_fill_manual(values = c("dynamique" = "#3498db", "mecanique" = "#e74c3c")) +
+  mon_theme
+
+# 5. RELIGION PAR TYPE DE DYSTOCIE (Barres empilées)
+religion_summary <- df_dystocie %>%
+  count(`type de dystocie`, religion) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(pourcentage = n/sum(n)*100,
+         label = paste0(n, " (", round(pourcentage, 1), "%)"))
+
+p_religion <- ggplot(religion_summary, aes(x = `type de dystocie`, y = n, fill = religion)) +
+  geom_col(position = "stack", alpha = 0.8) +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5), 
+            size = 3.5, color = "white", fontface = "bold") +
+  labs(title = "AFFILIATION RELIGIEUSE PAR TYPE DE DYSTOCIE",
+       x = "Type de dystocie", y = "Nombre de patientes",
+       fill = "Religion") +
+  scale_fill_manual(values = c("catholique" = "#3498db", "musulmane" = "#e74c3c", 
+                              "prostestante" = "#2ecc71")) +
+  mon_theme
+
+# 6. PROFESSION PAR TYPE DE DYSTOCIE (Top 5 professions)
+# Regroupement des professions moins fréquentes
+profession_summary <- df_dystocie %>%
+  mutate(profession_group = ifelse(profession %in% c("menagere", "couturiere", "etudiante", 
+                                                    "enseignante", "commercante"),
+                                  profession, "Autres professions")) %>%
+  count(`type de dystocie`, profession_group) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(pourcentage = n/sum(n)*100,
+         label = paste0(n, " (", round(pourcentage, 1), "%)"))
+
+p_profession <- ggplot(profession_summary, 
+                      aes(x = profession_group, y = n, fill = `type de dystocie`)) +
+  geom_col(position = "dodge", alpha = 0.8) +
+  geom_text(aes(label = label), position = position_dodge(width = 0.9), 
+            vjust = -0.5, size = 3, angle = 45) +
+  labs(title = "PROFESSIONS PRINCIPALES PAR TYPE DE DYSTOCIE",
+       subtitle = "Top 5 professions + regroupement des autres",
+       x = "Profession", y = "Nombre de patientes",
+       fill = "Type de dystocie") +
+  scale_fill_manual(values = c("dynamique" = "#3498db", "mecanique" = "#e74c3c")) +
+  mon_theme +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# AFFICHAGE DES GRAPHIQUES
+library(gridExtra)
+library(patchwork)
+
+# Arrangement en grille
+(p_age | p_parite) /
+  (p_statut | p_instruction) /
+  (p_religion | p_profession) +
+  plot_annotation(title = "ANALYSE COMPARATIVE DES CARACTÉRISTIQUES SOCIO-DÉMOGRAPHIQUES\nPAR TYPE DE DYSTOCIE",
+                  theme = theme(plot.title = element_text(face = "bold", size = 16, hjust = 0.5)))
+
+# Affichage individuel pour meilleure lisibilité
+print(p_age)
+print(p_parite)
+print(p_statut)
+print(p_instruction)
+print(p_religion)
+print(p_profession)
+```
+Statut Matrimonial par Type de Dystocie:
+Le statut matrimonial (célibataire ou mariée) ne montre aucune association avec le type de dystocie. La répartition est quasi identique entre les deux groupes (environ 60% de célibataires et 40% de mariées dans chaque cas), indiquant clairement que ce facteur socio-démographique n'influence pas la survenue d'une dystocie mécanique plutôt que dynamique, ou vice-versa.
+
+ Niveau d'Instruction par Type de Dystocie:
+ La distribution des niveaux d'instruction est très équilibrée entre les deux types de dystocie. On observe une légère tendance non significative où le groupe "dynamique" compte un peu plus de patientes de niveau primaire, tandis que le groupe "mécanique" en compte un peu plus de niveau supérieur. Globalement, le niveau d'instruction ne semble pas influencer de manière cliniquement pertinente la survenue d'un type de dystocie plutôt qu'un autre.
+ 
+ 
+ Affiliation Religieuse par Type de Dystocie:
+  La proportion de catholiques, musulmanes et protestantes est pratiquement identique dans les deux groupes de dystocie. Aucune affiliation religieuse spécifique n'est associée de façon significative à un type de dystocie particulier. Ce facteur socio-culturel ne apparaît pas comme un facteur de risque différenciant dans notre cohorte.
+  
+Professions Principales par Type de Dystocie:
+La profession des patientes ne semble présenter aucune association avec le type de dystocie. La répartition des différentes professions (ménagères, couturières, étudiantes, etc.) est équilibrée entre les groupes de dystocie mécanique et dynamique, ce qui indique que ce facteur, souvent lié au niveau socio-économique ou à l'activité physique, n’a aucune influence discernable sur la nature de la dystocie dans cette étude.
+
+ Répartition de la Parité par Type de Dystocie:
+ C'est le seul facteur socio-démographique qui montre une tendance notable. On observe que les patientes ayant une parité élevée (multipares, notamment para 4 et plus) sont proportionnellement plus nombreuses dans le groupe des dystocies dynamiques. À l'inverse, la répartition est plus équilibrée pour les nullipares (première grossesse) et les faibles parités. Cela est physiologiquement cohérent : les dystocies dynamiques (liées à un défaut de la contractilité utérine) sont plus fréquentes chez les multipares dont l'utérus a déjà été distendu, tandis que les dystocies mécaniques (liées à un obstacle) peuvent survenir indépendamment du nombre d'accouchements précédents.
+ 
+ 
+ Conclusion:
+ En résumé, parmi les facteurs socio-démographiques analysés, la parité est le seul qui montre une association cliniquement logique avec le type de dystocie, les multipares étant plus à risque de dystocie dynamique. Le statut matrimonial, le niveau d'instruction, la religion et la profession ne présentent pas de variations significatives entre les deux groupes et ne peuvent donc pas être considérés comme des facteurs prédominants ou influençant le type de dystocie dans cette étude.
+ 
+ 
+
+## II. FACTEURS INTRINSÈQUES (PATIENTE & FŒTUS)
+
+## 4. Antécédents Obstétricaux : Quelle est la prévalence des antécédents de césarienne dans la cohorte ? Les antécédents de césarienne sont-ils significativement associés à la dystocie mécanique ? Existe-t-il d'autres antécédents obstétricaux (avortement, pré-éclampsie) liés à la dystocie ?
+
+```{r}
+#Quelle est la prévalence des antécédents de césarienne dans la cohorte ?
+library(ggplot2)
+library(dplyr)
+
+# Graphique 1: Prévalence des antécédents de césarienne
+prev_plot <- df %>%
+  count(`antecedents de cesarienne`) %>%
+  mutate(Percentage = n / sum(n) * 100) %>%
+  ggplot(aes(x = `antecedents de cesarienne`, y = Percentage, fill = `antecedents de cesarienne`)) +
+  geom_col() +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")), vjust = -0.5, size = 4) +
+  labs(title = "Prévalence des Antécédents de Césarienne",
+       subtitle = "Dans la cohorte totale (N = 85 patientes)",
+       x = "",
+       y = "Pourcentage (%)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(prev_plot)
+```
+
+ la prévalence des antécédents de césarienne dans la cohorte totale de 85 patientes est de 49.4%. La répartition détaillée montre que 24.7% des patientes n'ont pas d'antécédent de césarienne (non), 25.9% en ont un (oui), et une partie des données est manquante (NA). Cela indique qu'une proportion significative de cette population obstétricale a déjà subi une césarienne, un facteur de risque important pour la planification de l'accouchement et la prise encharge des grossesses ultérieures.
+
+
+
+```{r}
+#Association entre Antécédents de Césarienne et Type de Dystocie
+# Graphique 2: Association césarienne-dystocie
+cesar_dystocie_plot <- df %>%
+  filter(!is.na(`type de dystocie`)) %>%
+  group_by(`antecedents de cesarienne`, `type de dystocie`) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  group_by(`type de dystocie`) %>%
+  mutate(Percentage = Count / sum(Count) * 100) %>%
+  ggplot(aes(x = `type de dystocie`, y = Percentage, fill = `antecedents de cesarienne`)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(Count, "\n(", round(Percentage, 1), "%)")), 
+            position = position_dodge(width = 0.9), vjust = -0.3, size = 3) +
+  labs(title = "Antécédents de Césarienne par Type de Dystocie",
+       x = "Type de Dystocie",
+       y = "Pourcentage (%)",
+       fill = "Antécédents\nCésarienne") +
+  theme_minimal() +
+  scale_fill_manual(values = c("non" = "#f8766d", "oui" = "#00ba38"))  # Rouge/Vert
+
+print(cesar_dystocie_plot)
+```
+
+On observe une prévalence plus élevée chez les patientes présentant une dystocie dynamique (67.6%) par rapport à celles ayant une dystocie mécanique (34.6%). Inversement, l'absence d'antécédent de césarienne est plus fréquente en cas de dystocie mécanique (65.4%) contre dynamique (32.4%). Cela suggère un lien fort entre un antécédent de césarienne et un risque accru de dystocie dynamique (often related to uterine contractility issues) lors d'un accouchement ultérieur, ce qui est un élément crucial pour l'évaluation du pronostic de l'accouchement vaginal.
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(forcats) # Pour manipuler les facteurs
+library(scales) # Pour les pourcentages dans les labels
+
+# Filtrer les cas où le type de dystocie est connu
+df_analyse <- df %>% filter(!is.na(`type de dystocie`))
+```
+
+
+
+```{r}
+#Antécédents d'Avortement par Type de Dystocie
+# Antécédents d'avortement
+df_analyse <- df_analyse %>%
+  mutate(avortement = case_when(
+    grepl("avortement", `antecedents obstetricaux`, ignore.case = TRUE) ~ "Oui",
+    `antecedents obstetricaux` == "non" ~ "Non",
+    TRUE ~ "Autre/Non précisé"
+  ))
+
+avortement_plot <- df_analyse %>%
+  filter(avortement %in% c("Oui", "Non")) %>%
+  count(avortement, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n(", round(prop, 1), "%)"))
+
+ggplot(avortement_plot, aes(x = `type de dystocie`, y = prop, fill = avortement)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(aes(label = label), position = position_dodge(width = 0.8), 
+            vjust = -0.3, size = 3.5, lineheight = 0.8) +
+  scale_fill_manual(values = c("Non" = "#27AE60", "Oui" = "#F39C12"),
+                    name = "Antécédents\navortement") +
+  labs(title = "ANTÉCÉDENTS D'AVORTEMENT PAR TYPE DE DYSTOCIE",
+       x = "Type de dystocie", y = "Proportion (%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+# Antécédents hypertensifs
+df_analyse <- df_analyse %>%
+  mutate(hypertension = case_when(
+    grepl("eclampsie|HTA|hypertension", `antecedents medicaux`, ignore.case = TRUE) ~ "Oui",
+    `antecedents medicaux` == "non" ~ "Non",
+    TRUE ~ "Autre/Non précisé"
+  ))
+
+hta_plot <- df_analyse %>%
+  filter(hypertension %in% c("Oui", "Non")) %>%
+  count(hypertension, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n(", round(prop, 1), "%)"))
+
+ggplot(hta_plot, aes(x = `type de dystocie`, y = prop, fill = hypertension)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(aes(label = label), position = position_dodge(width = 0.8), 
+            vjust = -0.3, size = 3.5, lineheight = 0.8) +
+  scale_fill_manual(values = c("Non" = "#2980B9", "Oui" = "#C0392B"),
+                    name = "Antécédents\nhypertensifs") +
+  labs(title = "ANTÉCÉDENTS HYPERTENSIFS PAR TYPE DE DYSTOCIE",
+       x = "Type de dystocie", y = "Proportion (%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+La présence d'antécédents d'avortement ne montre pas de distribution significativement différente entre les deux types de dystocie. On observe que 27,8% des dystocies dynamiques et 44% des dystocies mécaniques concernent des patientes avec des antécédents d'avortement. Cette différence proportionnelle, bien que notable, ne suggère pas de lien pathophysiologique direct entre les antécédents d'avortement et un type spécifique de dystocie dans cette cohorte.
+
+
+Les antécédents hypertensifs (HTA, pré-éclampsie, éclampsie) apparaissent légèrement plus fréquents dans le groupe des dystocies dynamiques (16%) que dans le groupe des dystocies mécaniques (9,1%). Cette tendance, bien que modeste, est cliniquement cohérente car les pathologies hypertensives gravidiques peuvent altérer la contractilité utérine et la vascularisation placentaire, predisposant ainsi plutôt à des dystocies dynamiques. 
+
+
+
+```{r}
+# | label: eclampsie-analysis
+# | warning: false
+# | message: false
+
+# Extraction des cas d'éclampsie à partir des antécédents médicaux
+df_eclampsie <- df %>%
+  filter(!is.na(`type de dystocie`)) %>%
+  mutate(eclampsie = case_when(
+    grepl("eclampsie", `antecedents medicaux`, ignore.case = TRUE) ~ "Oui",
+    TRUE ~ "Non"  # Tous les autres cas sont considérés comme "Non"
+  ))
+
+# Vérification des cas identifiés
+cas_eclampsie <- df_eclampsie %>%
+  filter(eclampsie == "Oui") %>%
+  select(ID, `antecedents medicaux`, `type de dystocie`)
+
+print("Cas d'éclampsie identifiés :")
+knitr::kable(cas_eclampsie)
+
+# Tableau de contingence
+table_eclampsie <- table(df_eclampsie$eclampsie, df_eclampsie$`type de dystocie`)
+knitr::kable(table_eclampsie, 
+             caption = "Répartition des antécédents d'éclampsie par type de dystocie")
+
+# Test exact de Fisher (nécessaire pour petits effectifs)
+if(nrow(cas_eclampsie) > 0) {
+  fisher_test <- fisher.test(table_eclampsie)
+  print(fisher_test)
+} else {
+  print("Aucun cas d'éclampsie identifié dans la cohorte")
+}
+
+# Visualisation graphique
+eclampsie_plot <- df_eclampsie %>%
+  count(eclampsie, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n(", round(prop, 1), "%)"))
+
+ggplot(eclampsie_plot, aes(x = `type de dystocie`, y = prop, fill = eclampsie)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(aes(label = label), position = position_dodge(width = 0.8), 
+            vjust = -0.3, size = 3.5, lineheight = 0.8) +
+  scale_fill_manual(values = c("Non" = "#3498DB", "Oui" = "#E74C3C"),
+                    name = "Antécédents\nd'éclampsie") +
+  labs(title = "ANTÉCÉDENTS D'ÉCLAMPSIE PAR TYPE DE DYSTOCIE",
+       subtitle = "Extrait des antécédents médicaux",
+       x = "Type de dystocie", 
+       y = "Proportion (%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+
+
+## 5. Caractéristiques Fœtales :Quelle est la fréquence de la macrosomie fœtale et son impact sur le type de dystocie ? Comment se répartissent les présentations fœtales (céphalique, siège, transverse) et sont-elles liées à la dystocie ? Quelle est la prévalence des anomalies du liquide amniotique et leur influence sur le travail ?
+
+```{r}
+# Fréquence de la macrosomie fœtale et impact sur le type de dystocie
+
+```
+
+```{r}
+
+# | label: macrosomie-foetale
+# | warning: false
+# | message: false
+
+# Graphique redesigned pour la macrosomie foetale
+ggplot(macro_analyse, 
+       aes(x = `presence de macrosomie fœtale`, 
+           y = n, 
+           fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(width = 0.8), 
+           width = 0.7, 
+           alpha = 0.9) +
+  geom_text(aes(label = paste0("n=", n, "\n(", round(prop, 1), "%)")),
+            position = position_dodge(width = 0.8),
+            vjust = -0.3, 
+            size = 3.5,
+            lineheight = 0.8,
+            fontface = "bold") +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", 
+                              "mecanique" = "#E74C3C")) +
+  labs(title = "MACROSOMIE FŒTALE PAR TYPE DE DYSTOCIE",
+       subtitle = "Distribution de la macrosomie en fonction du type de dystocie",
+       x = "Présence de macrosomie fœtale",
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p-value =", 
+                      round(fisher_test_macro$p.value, 4))) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray50"),
+    axis.text.x = element_text(angle = 0, hjust = 0.5), # Angle à 0 pour "oui/non"
+    legend.position = "bottom",
+    panel.grid.major.x = element_blank()
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) # Plus d'espace pour les labels
+
+# Affichage complémentaire sous forme de tableau
+knitr::kable(macro_analyse %>% 
+               select(Macrosomie = `presence de macrosomie fœtale`,
+                      `Type dystocie` = `type de dystocie`,
+                      Effectif = n,
+                      Pourcentage = prop) %>%
+               arrange(Macrosomie, `Type dystocie`),
+             caption = "DISTRIBUTION DÉTAILLÉE DE LA MACROSOMIE FŒTALE")
+```
+la répartition de la macrosomie fœtale en fonction du type de dystocie. La dystocie mécanique présente la plus forte proportion de patientes sans macrosomie (n=22, 84,6%), tandis que la dystocie dynamique compte un nombre plus important de patientes avec macrosomie (n=12, 32,4%) que le groupe mécanique (n=4, 15,4%). La visualisation graphique renforce l'impression que l'absence de macrosomie est un facteur prédominant dans les deux groupes, mais particulièrement dans les dystocies mécaniques, où elle pourrait être un facteur de risque moins déterminant que d'autres causes mécaniques.
+
+
+```{r}
+#Prévalence des anomalies du liquide amniotique et influence sur le travail 
+# | label: anomalies-liquide
+# | warning: false
+# | message: false
+
+# Graphique redesigned pour les anomalies du liquide amniotique
+ggplot(liquide_analyse, 
+       aes(x = `presence d'anomalie du liquide amniotique`, 
+           y = n, 
+           fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(width = 0.8), 
+           width = 0.7, 
+           alpha = 0.9) +
+  geom_text(aes(label = paste0("n=", n, "\n(", round(prop, 1), "%)")),
+            position = position_dodge(width = 0.8),
+            vjust = -0.3, 
+            size = 3.5,
+            lineheight = 0.8,
+            fontface = "bold") +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", 
+                              "mecanique" = "#E74C3C")) +
+  labs(title = "ANOMALIES DU LIQUIDE AMNIOTIQUE PAR TYPE DE DYSTOCIE",
+       subtitle = "Distribution des anomalies en fonction du type de dystocie",
+       x = "Présence d'anomalie du liquide amniotique",
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p-value =", 
+                      round(fisher_test_liquide$p.value, 4))) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray50"),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    legend.position = "bottom",
+    panel.grid.major.x = element_blank()
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2)))
+
+# Affichage complémentaire sous forme de tableau
+knitr::kable(liquide_analyse %>% 
+               select(Anomalie = `presence d'anomalie du liquide amniotique`,
+                      `Type dystocie` = `type de dystocie`,
+                      Effectif = n,
+                      Pourcentage = prop) %>%
+               arrange(Anomalie, `Type dystocie`),
+             caption = "DISTRIBUTION DÉTAILLÉE DES ANOMALIES DU LIQUIDE AMNIOTIQUE")
+
+# Analyse des types d'anomalies spécifiques
+type_liquide_analyse <- df %>%
+  filter(!is.na(`type de dystocie`) & `presence d'anomalie du liquide amniotique` == "oui") %>%
+  count(`anomalie du lique amniotique`, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100)
+
+knitr::kable(type_liquide_analyse, 
+             caption = "RÉPARTITION DES TYPES SPÉCIFIQUES D'ANOMALIES DU LIQUIDE AMNIOTIQUE")
+```
+la distribution des anomalies du liquide amniotique. Une proportion importante de patientes, tant en dystocie dynamique (62,2%) que mécanique (65,4%), ne présentait pas d'anomalie du liquide amniotique. La prévalence de la présence d'une anomalie était plus faible et relativement similaire entre les deux types de dystocie (37,8% pour dynamique vs 34,6% pour mécanique). Cela suggère que les anomalies du liquide amniotique, dans cette cohorte, n'étaient pas un facteur distinctif ou prédominant dans la survenue d'un type de dystocie particulier.
+
+
+
+
+```{r}
+#Analyse descriptive détaillée du type d'anomalies
+# Analyse des types d'anomalies du liquide amniotique# | label: types-anomalies-liquide
+# | warning: false
+# | message: false
+
+# Analyse des types d'anomalies du liquide amniotique avec le nom EXACT
+type_liquide_analyse <- df %>%
+  filter(!is.na(`type de dystocie`) & `presence d'anomalie du liquide amniotique` == "oui") %>%
+  count(`anomalie du liquide amniotique`, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label_pourcentage = paste0(round(prop, 1), "%"))
+
+# Affichage sous forme de tableau
+knitr::kable(type_liquide_analyse %>% 
+               select(`Type d'anomalie` = `anomalie du liquide amniotique`,
+                      `Type dystocie` = `type de dystocie`,
+                      Effectif = n,
+                      Pourcentage = prop),
+             caption = "DISTRIBUTION DES TYPES D'ANOMALIES DU LIQUIDE AMNIOTIQUE")
+
+# Visualisation graphique avec pourcentages au-dessus des barres
+if(nrow(type_liquide_analyse) > 0) {
+  ggplot(type_liquide_analyse, 
+         aes(x = `anomalie du liquide amniotique`, 
+             y = n, 
+             fill = `type de dystocie`)) +
+    geom_col(position = position_dodge(width = 0.8), 
+             width = 0.7, 
+             alpha = 0.9) +
+    geom_text(aes(label = label_pourcentage),  # Seulement le pourcentage
+              position = position_dodge(width = 0.8),
+              vjust = -0.5,  # Position au-dessus des barres
+              size = 4,
+              fontface = "bold",
+              color = "black") +
+    geom_text(aes(label = paste0("n=", n)),  # Effectif à l'intérieur ou en dessous
+              position = position_dodge(width = 0.8),
+              vjust = 1.2,  # Position à l'intérieur du haut des barres
+              size = 3.5,
+              color = "white",
+              fontface = "bold") +
+    scale_fill_manual(values = c("dynamique" = "#3498DB", 
+                                "mecanique" = "#E74C3C")) +
+    labs(title = "TYPES D'ANOMALIES DU LIQUIDE AMNIOTIQUE",
+         subtitle = "Répartition par type de dystocie",
+         x = "Type d'anomalie du liquide amniotique",
+         y = "Nombre de patientes",
+         fill = "Type de dystocie") +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+      plot.subtitle = element_text(size = 10, hjust = 0.5, color = "gray50"),
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+      legend.position = "bottom"
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.3)))  # Plus d'espace pour les pourcentages
+} else {
+  print("Aucune anomalie du liquide amniotique recensée dans les cas avec type de dystocie connu")
+}
+```
+Cette image détaille les types spécifiques d'anomalies du liquide amniotique en fonction de la dystocie. La méconium est l'anomalie la plus fréquemment rapportée, présente chez 33,3% des patientes avec dystocie dynamique et 35,7% de celles avec une dystocie mécanique. Les oligoamnios et l'hydramnios apparaissent à des fréquences plus basses et variables. La répartition des différents types d'anomalies semble globalement similaire entre les deux types de dystocie, indiquant qu'aucune anomalie spécifique n'est fortement associée à l'un ou l'autre type de dystocie dans cette étude.
+
+
+
+## 6. État Maternel :Quelles sont les pathologies médicales (HTA, diabète, infections) les plus fréquentes ?,  Ces pathologies augmentent-elles le risque de dystocie mécanique ? Existe-t-il des complications de la grossesse associées à la dystocie ?
+
+
+```{r}
+# | label: etat-maternel
+# | warning: false
+# | message: false
+
+# 1. Pathologies médicales les plus fréquentes
+pathologies_freq <- df %>%
+  filter(`antecedents medicaux` != "non") %>%
+  count(`antecedents medicaux`, sort = TRUE) %>%
+  mutate(pourcentage = n / nrow(df) * 100)
+
+# Graphique avec meilleure visibilité
+ggplot(pathologies_freq %>% filter(n > 0), 
+       aes(x = reorder(`antecedents medicaux`, n), y = n)) +
+  geom_col(fill = "#3498DB", alpha = 0.8, width = 0.6) +
+  geom_text(aes(label = paste0("n = ", n, "\n", round(pourcentage, 1), "%")),
+            hjust = -0.1, size = 3.8, color = "black", fontface = "bold", lineheight = 0.8) +
+  coord_flip() +
+  labs(title = "PATHOLOGIES MÉDICALES LES PLUS FRÉQUENTES",
+       subtitle = "Antécédents médicaux dans la cohorte (N = 85 patientes)",
+       x = "Pathologie médicale",
+       y = "Nombre de patientes") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2)))
+
+# 2. Association pathologies-dystocie mécanique
+patho_dystocie <- df %>%
+  filter(!is.na(`type de dystocie`)) %>%
+  mutate(pathologie_HTA = ifelse(grepl("HTA|hypertension|eclampsie", `antecedents medicaux`, ignore.case = TRUE), "Oui", "Non"))
+
+# Analyse HTA avec visibilité améliorée
+hta_plot <- patho_dystocie %>%
+  count(pathologie_HTA, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+ggplot(hta_plot, aes(x = pathologie_HTA, y = n, fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, alpha = 0.9) +
+  geom_text(aes(label = label),
+            position = position_dodge(0.8), 
+            vjust = -0.3, 
+            size = 4.2,
+            fontface = "bold",
+            color = "black",
+            lineheight = 0.85) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "ANTÉCÉDENTS HTA/ÉCLAMPSIE PAR TYPE DE DYSTOCIE",
+       subtitle = "Association entre pathologies hypertensives et type de dystocie",
+       x = "Antécédents HTA/Éclampsie", 
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p =", round(fisher.test(table(patho_dystocie$pathologie_HTA, patho_dystocie$`type de dystocie`))$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "bottom") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.3)))
+
+# 3. Complications de la grossesse avec visibilité optimale
+complications_analyse <- df %>%
+  filter(!is.na(`type de dystocie`)) %>%
+  mutate(complication = ifelse(`complications pendant la grossesse` != "non", "Oui", "Non")) %>%
+  count(complication, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+ggplot(complications_analyse, aes(x = complication, y = n, fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, alpha = 0.9) +
+  geom_text(aes(label = label),
+            position = position_dodge(0.8), 
+            vjust = -0.3, 
+            size = 4.2,
+            fontface = "bold",
+            color = "black",
+            lineheight = 0.85) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "COMPLICATIONS PENDANT LA GROSSESSE PAR TYPE DE DYSTOCIE",
+       subtitle = "Impact des complications gestationnelles sur le type de dystocie",
+       x = "Complications pendant la grossesse", 
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p =", round(fisher.test(table(ifelse(df_analyse$`complications pendant la grossesse` != "non", "Oui", "Non"), df_analyse$`type de dystocie`))$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "bottom") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.3)))
+
+# 4. Analyse détaillée des types de complications
+complications_detail <- df %>%
+  filter(!is.na(`type de dystocie`) & `complications pendant la grossesse` != "non") %>%
+  count(`complications pendant la grossesse`, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, " (", round(prop, 1), "%)"))
+
+knitr::kable(complications_detail %>% 
+               select(Complication = `complications pendant la grossesse`,
+                      `Type dystocie` = `type de dystocie`,
+                      Effectif = n,
+                      Pourcentage = prop),
+             caption = "DÉTAIL DES COMPLICATIONS DE GROSSESSE PAR TYPE DE DYSTOCIE")
+```
+
+La premiere image image liste les pathologies médicales antérieures les plus fréquentes dans la cohorte totale de 85 patientes. L'hypertension artérielle (HTA) est l'antécédent le plus fréquent (n=4, 4,7%), suivie de l'hépatite B et du diabète (n=2 chacun). D'autres pathologies comme le VIH, la pré-éclampsie et l'éclampsie sont plus rares. Globalement, la prévalence des antécédents médicaux importants dans cette population obstétricale est relativement faible, la grande majorité des patientes n'ayant pas rapporté de pathologie chronique significative.
+
+
+La deuxieme image présente la répartition des antécédents d'HTA ou d'éclampsie en fonction du type de dystocie. Une écrasante majorité des patientes, quel que soit le type de dystocie, n'avait pas cet antécédent (91,9% pour la dystocie dynamique et 84,6% pour la dystocie mécanique). La faible proportion de patientes avec des antécédents hypertensifs est légèrement plus élevée dans le groupe de dystocie mécanique (15,4%) que dans le groupe dynamique (8,1%). La valeur-p (p = 0) indique une association statistiquement significative, suggérant que la présence d'antécédents hypertensifs, bien que rare, pourrait être un facteur plus fortement lié aux dystocies mécaniques dans cette cohorte.
+
+
+La troisieme image analyse la présence de complications pendant la grossesse en fonction du type de dystocie. La prévalence des grossesses compliquées est plus élevée dans le groupe de dystocie mécanique (61,5%) que dans le groupe dynamique (48,6%). Inversement, les grossesses sans complications étaient plus fréquentes en cas de dystocie dynamique. Cependant, la valeur-p du test exact de Fisher (p = 0,4524) indique que cette différence observée n'est pas statistiquement significative. Par conséquent, on ne peut pas affirmer que les complications de grossesse soient un facteur de risque différentiel pour un type de dystocie plutôt qu'un autre dans cette étude.
+
+
+Ce tableau détaille les complications spécifiques de la grossesse et leur association avec le type de dystocie. Le paludisme apparaît comme la complication la plus fréquente, présent seul ou en association dans la majorité des cas, et ce pour les deux types de dystocie. Les infections urinaires et l'hypertension artérielle gestationnelle sont également rapportées. Aucune complication spécifique ne se distingue clairement comme étant exclusivement ou majoritairement associée à un type de dystocie particulier, ce qui corrobore l'absence de significativité statistique globale observée dans le graphique précédent.
+
+
+## III. FACTEURS EXTRINSÈQUES (PRISE EN CHARGE MÉDICALE)
+
+## 7. Suivi Prénatal :Quel est le nombre moyen de consultations prénatales (CPN) ? Le suivi par un professionnel de santé influence-t-il le type de dystocie ? Un nombre insuffisant de CPN est-il un facteur de risque ?
+
+```{r}
+# | label: suivi-prenatal
+# | warning: false
+# | message: false
+
+# 1. Nombre moyen de consultations prénatales (CPN)
+cpn_stats <- df %>%
+  summarise(
+    Moyenne_CPN = mean(`nombres de CPN`, na.rm = TRUE),
+    Mediane_CPN = median(`nombres de CPN`, na.rm = TRUE),
+    SD_CPN = sd(`nombres de CPN`, na.rm = TRUE),
+    Min_CPN = min(`nombres de CPN`, na.rm = TRUE),
+    Max_CPN = max(`nombres de CPN`, na.rm = TRUE),
+    N = sum(!is.na(`nombres de CPN`))
+  )
+
+knitr::kable(cpn_stats, caption = "STATISTIQUES DES CONSULTATIONS PRÉNATALES (CPN)")
+
+# Distribution des CPN
+ggplot(df, aes(x = `nombres de CPN`)) +
+  geom_histogram(fill = "#3498DB", alpha = 0.8, bins = 15, color = "white") +
+  geom_vline(aes(xintercept = mean(`nombres de CPN`, na.rm = TRUE)), 
+             color = "#E74C3C", linetype = "dashed", size = 1.2) +
+  geom_text(aes(x = mean(`nombres de CPN`, na.rm = TRUE), y = 10, 
+                label = paste0("Moyenne = ", round(mean(`nombres de CPN`, na.rm = TRUE), 1))),
+            color = "#E74C3C", hjust = -0.1, size = 4, fontface = "bold") +
+  labs(title = "DISTRIBUTION DU NOMBRE DE CONSULTATIONS PRÉNATALES",
+       subtitle = "Fréquence des CPN dans la cohorte (N = 85 patientes)",
+       x = "Nombre de consultations prénatales (CPN)",
+       y = "Nombre de patientes") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"))
+
+# 2. Suivi par un professionnel de santé
+suivi_analyse <- df %>%
+  filter(!is.na(`type de dystocie`)) %>%
+  count(`Suivi par un professionnel de sante`, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+# Test statistique
+table_suivi <- table(df_analyse$`Suivi par un professionnel de sante`, df_analyse$`type de dystocie`)
+fisher_suivi <- fisher.test(table_suivi)
+
+ggplot(suivi_analyse, aes(x = `Suivi par un professionnel de sante`, y = n, fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, alpha = 0.9) +
+  geom_text(aes(label = label),
+            position = position_dodge(0.8), 
+            vjust = -0.3, 
+            size = 4.2,
+            fontface = "bold",
+            color = "black",
+            lineheight = 0.85) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "SUIVI PAR UN PROFESSIONNEL DE SANTÉ PAR TYPE DE DYSTOCIE",
+       subtitle = "Impact du suivi médical sur le type de dystocie",
+       x = "Suivi par un professionnel de santé", 
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p =", round(fisher_suivi$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "bottom") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.3)))
+
+# 3. Nombre insuffisant de CPN comme facteur de risque
+# Définition: moins de 4 CPN considéré comme insuffisant (recommandation OMS)
+df_cpn_risk <- df %>%
+  filter(!is.na(`type de dystocie`) & !is.na(`nombres de CPN`)) %>%
+  mutate(CPN_insuffisant = ifelse(`nombres de CPN` < 4, "Oui (<4 CPN)", "Non (≥4 CPN)"))
+
+cpn_risk_analyse <- df_cpn_risk %>%
+  count(CPN_insuffisant, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+# Test statistique
+table_cpn_risk <- table(df_cpn_risk$CPN_insuffisant, df_cpn_risk$`type de dystocie`)
+fisher_cpn_risk <- fisher.test(table_cpn_risk)
+
+ggplot(cpn_risk_analyse, aes(x = CPN_insuffisant, y = n, fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, alpha = 0.9) +
+  geom_text(aes(label = label),
+            position = position_dodge(0.8), 
+            vjust = -0.3, 
+            size = 4.2,
+            fontface = "bold",
+            color = "black",
+            lineheight = 0.85) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "NOMBRE INSUFFISANT DE CPN (<4) PAR TYPE DE DYSTOCIE",
+       subtitle = "Impact du suivi prénatal insuffisant sur le type de dystocie",
+       x = "CPN insuffisant (<4 consultations)", 
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p =", round(fisher_cpn_risk$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "bottom") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.3)))
+
+# 4. Analyse comparative du nombre moyen de CPN par type de dystocie
+cpn_mean_analyse <- df %>%
+  filter(!is.na(`type de dystocie`)) %>%
+  group_by(`type de dystocie`) %>%
+  summarise(Moyenne_CPN = mean(`nombres de CPN`, na.rm = TRUE),
+            SD_CPN = sd(`nombres de CPN`, na.rm = TRUE),
+            N = n()) %>%
+  mutate(Label = paste0(round(Moyenne_CPN, 1), " ± ", round(SD_CPN, 1)))
+
+# Test t de Student
+t_test_cpn <- t.test(`nombres de CPN` ~ `type de dystocie`, data = df_analyse)
+
+ggplot(cpn_mean_analyse, aes(x = `type de dystocie`, y = Moyenne_CPN, fill = `type de dystocie`)) +
+  geom_col(width = 0.6, alpha = 0.8) +
+  geom_errorbar(aes(ymin = Moyenne_CPN - SD_CPN, ymax = Moyenne_CPN + SD_CPN),
+                width = 0.2, color = "black") +
+  geom_text(aes(label = Label), vjust = -1.5, size = 4.5, fontface = "bold", color = "black") +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "NOMBRE MOYEN DE CPN PAR TYPE DE DYSTOCIE",
+       subtitle = "Comparaison du suivi prénatal entre les groupes",
+       x = "Type de dystocie", 
+       y = "Nombre moyen de CPN (± SD)",
+       caption = paste("Test t de Student, p =", round(t_test_cpn$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "none") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2)))
+```
+La premiere image présente la distribution du nombre de consultations prénatales (CPN) au sein de la cohorte de 85 patientes. L'histogramme montre une distribution qui semble plafonner autour de 4 à 5 CPN pour un grand nombre de patientes, avec une queue de distribution s'étendant jusqu'à 10 CPN pour un plus petit nombre. Cette visualisation indique une variabilité dans l'adhésion au suivi prénatal, une proportion non négligeable de patientes ayant effectué un nombre de consultations inférieur aux recommandations standard, ce qui peut avoir des implications sur la détection et la prise en charge précoce des facteurs de risque obstétricaux.
+
+La deuxieme  image évalue l'impact du suivi par un professionnel de santé sur le type de dystocie. La grande majorité des patientes, quel que soit le type de dystocie, a bénéficié d'un tel suivi (83,8% pour la dystocie dynamique et 84,6% pour la dystocie mécanique). La proportion de patientes sans suivi professionnel est faible et quasi identique entre les deux groupes (16,2% vs 15,4%). La valeur-p (p = 1) du test exact de Fisher confirme qu'il n'existe aucune association statistique entre la présence d'un suivi médical et le type de dystocie survenu. Le suivi prénatal, dans cette cohorte, n'a pas été un facteur discriminant.
+
+
+La troisieme image analyse spécifiquement l'impact d'un nombre insuffisant de CPN (défini comme <4 consultations) sur le type de dystocie. Une proportion très élevée et similaire de patientes dans les deux groupes a effectué moins de 4 CPN (70,3% pour dystocie dynamique et 73,1% pour mécanique). Inversement, le respect des recommandations (≥4 CPN) était faible et comparable. La valeur-p de 1 indique une absence totale de différence statistique entre les groupes. Cela démontre qu'un suivi prénatal quantitativement insuffisant était une constante très répandue dans toute la cohorte et n'a pas influencé le type de dystocie développé.
+
+La derniere image compare le nombre moyen de consultations prénatales (CPN) entre les groupes de dystocie dynamique et mécanique. Les deux moyennes, représentées avec leurs écarts-types (SD), sont extrêmement proches, voire identiques. Le test statistique utilisé (test t de Student) rapporte une valeur-p de 0,9738, ce qui confirme qu'il n'existe aucune différence significative dans le nombre moyen de CPN entre les patientes ayant présenté une dystocie dynamique et celles ayant présenté une dystocie mécanique. La qualité quantitative du suivi prénatal n'apparaît donc pas comme un facteur différenciant entre ces deux étiologies de dystocie.
+
+## 8. Déroulement du Travail : Quelle est la durée moyenne du travail pour chaque type de dystocie ? Une durée prolongée du travail est-elle un facteur de risque ou une conséquence de la dystocie ? Existe-t-il un seuil de durée critique à surveiller ?
+
+```{r}
+# | label: duree-travail
+# | warning: false
+# | message: false
+
+# 1. Nettoyage et conversion de la durée du travail
+df_duree <- df %>%
+  filter(!is.na(`type de dystocie`) & !is.na(`duree du travail`)) %>%
+  mutate(
+    # Nettoyer la variable durée du travail
+    duree_clean = gsub("heures|heure|heures|h|heure|hours|hour", "", `duree du travail`, ignore.case = TRUE),
+    duree_clean = gsub(" ", "", duree_clean),
+    duree_clean = gsub("0heures", "0", duree_clean),
+    duree_clean = as.numeric(duree_clean),
+    # Catégoriser la durée
+    duree_categorie = case_when(
+      duree_clean < 6 ~ "<6 heures",
+      duree_clean >= 6 & duree_clean < 12 ~ "6-12 heures",
+      duree_clean >= 12 & duree_clean < 18 ~ "12-18 heures",
+      duree_clean >= 18 ~ "≥18 heures"
+    )
+  )
+
+# 2. Statistiques descriptives de la durée du travail
+duree_stats <- df_duree %>%
+  group_by(`type de dystocie`) %>%
+  summarise(
+    Moyenne_heures = mean(duree_clean, na.rm = TRUE),
+    Mediane_heures = median(duree_clean, na.rm = TRUE),
+    SD_heures = sd(duree_clean, na.rm = TRUE),
+    Min_heures = min(duree_clean, na.rm = TRUE),
+    Max_heures = max(duree_clean, na.rm = TRUE),
+    N = n()
+  ) %>%
+  mutate(Label = paste0(round(Moyenne_heures, 1), " ± ", round(SD_heures, 1), " heures"))
+
+knitr::kable(duree_stats, caption = "STATISTIQUES DE LA DURÉE DU TRAVAIL PAR TYPE DE DYSTOCIE")
+
+# 3. Test statistique de comparaison des durées
+t_test_duree <- t.test(duree_clean ~ `type de dystocie`, data = df_duree)
+
+# 4. Visualisation de la distribution
+ggplot(df_duree, aes(x = duree_clean, fill = `type de dystocie`)) +
+  geom_density(alpha = 0.6, color = NA) +
+  geom_vline(data = duree_stats, aes(xintercept = Moyenne_heures, color = `type de dystocie`),
+             linetype = "dashed", size = 1.2) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  scale_color_manual(values = c("dynamique" = "#2980B9", "mecanique" = "#C0392B")) +
+  labs(title = "DISTRIBUTION DE LA DURÉE DU TRAVAIL PAR TYPE DE DYSTOCIE",
+       subtitle = "Comparaison des profils de durée entre dystocies mécaniques et dynamiques",
+       x = "Durée du travail (heures)",
+       y = "Densité",
+       fill = "Type de dystocie",
+       color = "Moyenne",
+       caption = paste("Test t de Student, p =", round(t_test_duree$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"))
+
+# 5. Analyse par catégories de durée
+duree_cat_analyse <- df_duree %>%
+  count(duree_categorie, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+# Réordonner les catégories
+duree_cat_analyse$duree_categorie <- factor(duree_cat_analyse$duree_categorie,
+                                           levels = c("<6 heures", "6-12 heures", "12-18 heures", "≥18 heures"))
+
+ggplot(duree_cat_analyse, aes(x = duree_categorie, y = n, fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, alpha = 0.9) +
+  geom_text(aes(label = label),
+            position = position_dodge(0.8), 
+            vjust = -0.3, 
+            size = 4.0,
+            fontface = "bold",
+            color = "black",
+            lineheight = 0.85) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "DURÉE DU TRAVAIL PAR CATÉGORIES ET TYPE DE DYSTOCIE",
+       subtitle = "Répartition des patientes selon la durée du travail",
+       x = "Durée du travail", 
+       y = "Nombre de patientes",
+       fill = "Type de dystocie") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.3)))
+
+# 6. Seuil critique de durée (≥12 heures considéré comme prolongé)
+df_duree <- df_duree %>%
+  mutate(travail_prolonge = ifelse(duree_clean >= 12, "Oui (≥12h)", "Non (<12h)"))
+
+seuil_analyse <- df_duree %>%
+  count(travail_prolonge, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+# Test statistique
+table_seuil <- table(df_duree$travail_prolonge, df_duree$`type de dystocie`)
+fisher_seuil <- fisher.test(table_seuil)
+
+ggplot(seuil_analyse, aes(x = travail_prolonge, y = n, fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, alpha = 0.9) +
+  geom_text(aes(label = label),
+            position = position_dodge(0.8), 
+            vjust = -0.3, 
+            size = 4.2,
+            fontface = "bold",
+            color = "black",
+            lineheight = 0.85) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "TRAVAIL PROLONGÉ (≥12 HEURES) PAR TYPE DE DYSTOCIE",
+       subtitle = "Prévalence du travail prolongé comme facteur de risque",
+       x = "Travail prolongé (≥12 heures)", 
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p =", round(fisher_seuil$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "bottom") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.3)))
+
+# 7. Analyse des durées extrêmes (≥18 heures)
+duree_extreme_analyse <- df_duree %>%
+  filter(duree_clean >= 18) %>%
+  count(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+if(nrow(duree_extreme_analyse) > 0) {
+  ggplot(duree_extreme_analyse, aes(x = `type de dystocie`, y = n, fill = `type de dystocie`)) +
+    geom_col(width = 0.6, alpha = 0.9) +
+    geom_text(aes(label = label), vjust = -0.5, size = 4.5, fontface = "bold", color = "black") +
+    scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+    labs(title = "DURÉES EXTRÊMES DU TRAVAIL (≥18 HEURES)",
+         subtitle = "Répartition des travaux de très longue durée",
+         x = "Type de dystocie", 
+         y = "Nombre de patientes") +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+          plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+          legend.position = "none") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.2)))
+} else {
+  print("Aucun cas de travail ≥18 heures dans la cohorte")
+}
+
+# 8. Tableau récapitulatif des seuils
+seuils_recap <- data.frame(
+  Seuil = c("Normal", "Prolongé", "Très prolongé"),
+  Heures = c("<12", "12-18", "≥18"),
+  Definition = c("Durée physiologique normale", "Travail prolongé nécessitant surveillance", "Travail très prolongé, risque accru"),
+  Prevalence_totale = c(
+    sum(df_duree$duree_clean < 12, na.rm = TRUE),
+    sum(df_duree$duree_clean >= 12 & df_duree$duree_clean < 18, na.rm = TRUE),
+    sum(df_duree$duree_clean >= 18, na.rm = TRUE)
+  )
+)
+
+knitr::kable(seuils_recap, caption = "SEUILS CLINIQUES DE LA DURÉE DU TRAVAIL")
+```
+Le premier graphique présente la distribution globale de la durée du travail pour les deux types de dystocie. La courbe de densité montre que pour la majorité des patientes, la durée du travail était inférieure à 25 heures, avec un pic autour de 10-15 heures. Les distributions pour les dystocies dynamiques et mécaniques se superposent presque parfaitement, indiquant des profils de durée très similaires. Le test statistique (test t de Student, p = 0,9218) confirme qu'il n'existe aucune différence significative dans la durée moyenne du travail entre les deux groupes. La durée du travail en elle-même n'est donc pas un facteur discriminatoire pour prédire le type de dystocie.
+
+Le second quant a lui détaille la répartition des patientes en catégories de durée de travail. La majorité des patientes, quel que soit le type de dystocie, a eu un travail de durée "normale" (6-12h : 48,6% dynamique vs 38,5% mécanique). Une proportion importante a connu un travail prolongé (12-18h : 27% vs 30,8%). Les durées très longues (18-24h) et extrêmes (>24h) étaient moins fréquentes et légèrement plus représentées dans le groupe des dystocies mécaniques (23,1% pour >24h contre 8,1% pour les dynamiques). Cette tendance suggère que les travaux très longs pourraient être un peu plus associés aux dystocies mécaniques, bien que la différence ne soit pas frappante.
+
+
+Le troiseme se concentre sur la prévalence spécifique du travail prolongé, défini comme ≥12 heures. Une majorité de patientes dans les deux groupes a connu un travail prolongé (75,7% pour les dystocies dynamiques et 61,5% pour les mécaniques). Bien que la proportion soit plus élevée dans le groupe des dystocies dynamiques, le test exact de Fisher (p = 0,2721) indique que cette différence n'est pas statistiquement significative. Par conséquent, le travail prolongé est une caractéristique très fréquente dans les deux types de dystocie et ne permet pas de les distinguer l'un de l'autre.
+
+
+Et ebfin le dernier analyse la sous-catégorie la plus extrême : les durées de travail ≥18 heures. Les effectifs sont très faibles (n=5 au total). Dans ce petit groupe, les dystocies dynamiques étaient plus représentées (60%, n=3) que les mécaniques (40%, n=2). En raison du très faible nombre de cas, il est impossible de tirer une conclusion clinique ou statistique robuste sur une éventuelle association entre les travaux extrêmement longs et un type de dystocie particulier. Cela reflète simplement que ces événements étaient rares dans la cohorte étudiée.
+
+
+## 9. Interventions et Pratiques :Quelle est la fréquence d'utilisation des ocytociques traditionnels ?  Cette utilisation modifie-t-elle le risque ou le type de dystocie ? Quelles interventions médicales (césarienne, surveillance, antibiotiques) sont les plus courantes selon le type de dystocie ?
+
+```{r}
+# | label: interventions-pratiques
+# | warning: false
+# | message: false
+
+# 1. Fréquence d'utilisation des ocytociques traditionnels
+ocytocique_freq <- df %>%
+  count(`prise d'un ocytocique traditionnelle`) %>%
+  mutate(pourcentage = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(pourcentage, 1), "%"))
+
+ggplot(ocytocique_freq, aes(x = `prise d'un ocytocique traditionnelle`, y = n)) +
+  geom_col(fill = "#3498DB", alpha = 0.8, width = 0.6) +
+  geom_text(aes(label = label), vjust = -0.5, size = 4.5, fontface = "bold", color = "black") +
+  labs(title = "FRÉQUENCE D'UTILISATION DES OCYTOCIQUES TRADITIONNELS",
+       subtitle = "Utilisation de méthodes traditionnelles pour accélérer le travail",
+       x = "Prise d'ocytocique traditionnel", 
+       y = "Nombre de patientes") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2)))
+
+# 2. Impact des ocytociques traditionnels sur le type de dystocie
+ocytocique_dystocie <- df %>%
+  filter(!is.na(`type de dystocie`)) %>%
+  count(`prise d'un ocytocique traditionnelle`, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+# Test statistique
+table_ocytocique <- table(df_analyse$`prise d'un ocytocique traditionnelle`, df_analyse$`type de dystocie`)
+fisher_ocytocique <- fisher.test(table_ocytocique)
+
+ggplot(ocytocique_dystocie, aes(x = `prise d'un ocytocique traditionnelle`, y = n, fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, alpha = 0.9) +
+  geom_text(aes(label = label),
+            position = position_dodge(0.8), 
+            vjust = -0.3, 
+            size = 4.2,
+            fontface = "bold",
+            color = "black",
+            lineheight = 0.85) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "OCYTOCIQUES TRADITIONNELS PAR TYPE DE DYSTOCIE",
+       subtitle = "Impact des méthodes traditionnelles sur le type de dystocie",
+       x = "Prise d'ocytocique traditionnel", 
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p =", round(fisher_ocytocique$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "bottom") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.3)))
+
+# 3. Analyse des interventions médicales (nécessite un nettoyage de la variable)
+# Extraction des types d'interventions
+df_interventions <- df %>%
+  filter(!is.na(`type de dystocie`)) %>%
+  mutate(
+    cesarienne = ifelse(grepl("cesarienne", `interventions medicales faite`, ignore.case = TRUE), "Oui", "Non"),
+    surveillance = ifelse(grepl("surveillance", `interventions medicales faite`, ignore.case = TRUE), "Oui", "Non"),
+    antibiotiques = ifelse(grepl("antibio", `interventions medicales faite`, ignore.case = TRUE), "Oui", "Non"),
+    ocytociques_medicaux = ifelse(grepl("ocytocique", `interventions medicales faite`, ignore.case = TRUE), "Oui", "Non"),
+    autres_interventions = ifelse(!grepl("cesarienne|surveillance|antibio|ocytocique", `interventions medicales faite`, ignore.case = TRUE) & 
+                                  `interventions medicales faite` != "non", "Oui", "Non")
+  )
+
+# 4. Fréquence des interventions médicales
+interventions_freq <- df_interventions %>%
+  summarise(
+    Cesarienne = sum(cesarienne == "Oui"),
+    Surveillance = sum(surveillance == "Oui"),
+    Antibiotiques = sum(antibiotiques == "Oui"),
+    Ocytociques_medicaux = sum(ocytociques_medicaux == "Oui"),
+    Autres = sum(autres_interventions == "Oui")
+  ) %>%
+  pivot_longer(cols = everything(), names_to = "Intervention", values_to = "Nombre") %>%
+  mutate(Pourcentage = Nombre / nrow(df_interventions) * 100,
+         Label = paste0("n = ", Nombre, "\n", round(Pourcentage, 1), "%"))
+
+ggplot(interventions_freq, aes(x = reorder(Intervention, -Nombre), y = Nombre)) +
+  geom_col(fill = "#2ECC71", alpha = 0.8, width = 0.6) +
+  geom_text(aes(label = Label), vjust = -0.5, size = 4.0, fontface = "bold", color = "black", lineheight = 0.8) +
+  labs(title = "FRÉQUENCE DES INTERVENTIONS MÉDICALES",
+       subtitle = "Types d'interventions pratiquées dans la cohorte",
+       x = "Type d'intervention", 
+       y = "Nombre de patientes") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2)))
+
+# 5. Interventions par type de dystocie (Césarienne)
+cesarienne_analyse <- df_interventions %>%
+  count(cesarienne, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+fisher_cesarienne <- fisher.test(table(df_interventions$cesarienne, df_interventions$`type de dystocie`))
+
+ggplot(cesarienne_analyse, aes(x = cesarienne, y = n, fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, alpha = 0.9) +
+  geom_text(aes(label = label),
+            position = position_dodge(0.8), 
+            vjust = -0.3, 
+            size = 4.2,
+            fontface = "bold",
+            color = "black",
+            lineheight = 0.85) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "CÉSARIENNES PAR TYPE DE DYSTOCIE",
+       subtitle = "Taux de césarienne selon le type de dystocie",
+       x = "Césarienne pratiquée", 
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p =", round(fisher_cesarienne$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "bottom") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.3)))
+
+# 6. Interventions par type de dystocie (Antibiotiques)
+antibio_analyse <- df_interventions %>%
+  count(antibiotiques, `type de dystocie`) %>%
+  group_by(`type de dystocie`) %>%
+  mutate(prop = n / sum(n) * 100,
+         label = paste0("n = ", n, "\n", round(prop, 1), "%"))
+
+fisher_antibio <- fisher.test(table(df_interventions$antibiotiques, df_interventions$`type de dystocie`))
+
+ggplot(antibio_analyse, aes(x = antibiotiques, y = n, fill = `type de dystocie`)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, alpha = 0.9) +
+  geom_text(aes(label = label),
+            position = position_dodge(0.8), 
+            vjust = -0.3, 
+            size = 4.2,
+            fontface = "bold",
+            color = "black",
+            lineheight = 0.85) +
+  scale_fill_manual(values = c("dynamique" = "#3498DB", "mecanique" = "#E74C3C")) +
+  labs(title = "ANTIBIOTHÉRAPIE PAR TYPE DE DYSTOCIE",
+       subtitle = "Utilisation d'antibiotiques selon le type de dystocie",
+       x = "Antibiotiques administrés", 
+       y = "Nombre de patientes",
+       fill = "Type de dystocie",
+       caption = paste("Test exact de Fisher, p =", round(fisher_antibio$p.value, 4))) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray50"),
+        legend.position = "bottom") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.3)))
+
+# 7. Tableau récapitulatif des interventions par type de dystocie
+interventions_recap <- df_interventions %>%
+  group_by(`type de dystocie`) %>%
+  summarise(
+    Taux_cesarienne = mean(cesarienne == "Oui") * 100,
+    Taux_surveillance = mean(surveillance == "Oui") * 100,
+    Taux_antibiotiques = mean(antibiotiques == "Oui") * 100,
+    Taux_ocytociques_med = mean(ocytociques_medicaux == "Oui") * 100,
+    N = n()
+  ) %>%
+  mutate(across(where(is.numeric), round, 1))
+
+knitr::kable(interventions_recap, caption = "TAUX D'INTERVENTIONS MÉDICALES PAR TYPE DE DYSTOCIE (%)")
+```
+le premier graphique présente la fréquence d'utilisation des ocytociques traditionnels dans la cohorte totale. Près de la moitié des patientes (42,4%) ont rapporté avoir pris ce type de substance pour accélérer le travail, tandis qu'un tiers (31,8%) n'en a pas pris. Une part non négligeable (25,9%) des données est manquante (NA). Cette prévalence élevée de recours à des méthodes traditionnelles hors du cadre médical standardisé est un facteur important à considérer, car il peut influencer le déroulement du travail et potentiellement contribuer à des complications comme l'hyperstimulation utérine.
+
+Le second analyse l'utilisation des ocytociques traditionnels en fonction du type de dystocie. La proportion de patientes en ayant consommé est pratiquement identique dans les deux groupes (56,8% pour la dystocie dynamique et 57,7% pour la dystocie mécanique). Inversement, le taux de non-consommation est également très similaire. La valeur-p (p = 1) du test exact de Fisher confirme qu'il n'existe aucune association entre la prise d'ocytociques traditionnels et le type de dystocie développé. Cela suggère que cette pratique est un facteur de risque répandu et non spécifique, affectant de manière égale le risque de dystocie dynamique ou mécanique.
+
+Le troisieme  illustre la fréquence des différentes interventions médicales pratiquées. La césarienne est de loin l'intervention la plus fréquente, réalisée chez 95,2% des patientes. Viennent ensuite, mais à une fréquence bien moindre, l'administration d'antibiotiques (11,1%) et une autre intervention non précisée (6,3%). Les forceps et les ventouses n'ont pas été utilisés (0%). Ceci indique un taux d'intervention chirurgicale extrêmement élevé dans cette cohorte de patientes présentant une dystocie, avec une utilisation très limitée des méthodes d'extraction instrumentale vaginale.
+
+Le quatrieme compare le taux de césarienne en fonction du type de dystocie. Le taux était de 100% dans le groupe des dystocies mécaniques, contre 91,9% dans le groupe des dystocies dynamiques. Bien que cette différence semble importante, le test exact de Fisher (p = 0,2611) indique qu'elle n'atteint pas le seuil de significativité statistique. Néanmoins, le taux de 100% pour les dystocies mécaniques est cliniquement très pertinent et reflète la nature de ces dystocies, souvent dues à des obstacles mécaniques absolus (comme un bassin rétréci) ne permettant pas un accouchement vaginal.
+
+Et le dernier évalue l'utilisation d'une antibiothérapie en fonction du type de dystocie. Toutes les patientes (100%) du groupe des dystocies mécaniques ont reçu des antibiotiques, contre 89,2% dans le groupe des dystocies dynamiques. Bien que non statistiquement significative (p = 0,136), cette tendance suggère une prescription systématique ou quasi-systématique d'antibiotiques, particulièrement en cas de dystocie mécanique. Cette pratique est cohérente avec les protocoles visant à prévenir les infections post-opératoires, surtout après une césarienne souvent réalisée après un travail prolongé et/ou une rupture prolongée des membranes.
+
+
+
+## IV. ANALYSE SYNTHÈSE ET RECOMMANDATIONS
+
+## 10. Facteurs de Risque Indépendants : Après analyse multivariée, quels sont les facteurs restant significativement associés à la dystocie mécanique ?  Quel est le poids de chaque facteur (Odds Ratio) ?
+
+## 11. Profils à Haut Risque : Peut-on définir un profil type de patiente à haut risque de dystocie mécanique ? Quelle est la prévalence de ce profil et sa valeur prédictive ?
+
+## 12. Implications Cliniques :Quelles actions préventives prioriser (suivi renforcé, dépistage échographique, etc.) ? Quels indicateurs de suivi mettre en place pour améliorer la prise en charge ?
+
+## 5. 
